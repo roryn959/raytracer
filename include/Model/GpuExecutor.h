@@ -4,7 +4,6 @@
 
 #include "View/Canvas.h"
 #include "Core/Colour.h"
-#include "Ray.h"
 #include "World.h"
 
 

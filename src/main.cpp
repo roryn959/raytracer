@@ -4,7 +4,7 @@
 
 #include "Core/Colour.h"
 
-#define GPU_BUILD 1
+#define GPU_BUILD 0
 
 #if GPU_BUILD
 #include "Model/GpuExecutor.h"

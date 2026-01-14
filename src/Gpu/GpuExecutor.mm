@@ -104,13 +104,7 @@ void GpuExecutor::TraceRays(uint32_t* pixels) {
         deallocator:nil
 	];
 
-	id<MTLBuffer> worldBoundsBuffer = [
-		impl->device newBufferWithBytes:&m_world.GetBounds()
-		length:sizeof(WorldBounds)
-		options:MTLResourceStorageModeShared
-	];
-
-    if (!pixelBuffer | !worldBoundsBuffer) {
+    if (!pixelBuffer) {
         std::cerr << "Failed to create buffer.\n";
         return;
     }
@@ -126,7 +120,6 @@ void GpuExecutor::TraceRays(uint32_t* pixels) {
 
 	[enc setComputePipelineState:impl->pipeline];
     [enc setBuffer:pixelBuffer offset:0 atIndex:0];
-	[enc setBuffer:worldBoundsBuffer offset:0 atIndex:1];
 
     MTLSize gridSize = MTLSizeMake(count, 1, 1);
 

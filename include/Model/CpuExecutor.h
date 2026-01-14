@@ -2,10 +2,32 @@
 
 #include <cstddef>
 
-#include "View/Canvas.h"
 #include "Core/Colour.h"
-#include "Ray.h"
+#include "Core/Cuboid.h"
+#include "View/Canvas.h"
 #include "World.h"
+
+#define MAX_COLLISIONS 10
+
+
+enum class AXIS {
+	X,
+	Y,
+	Z
+};
+
+struct Ray {
+	Vector m_pos;
+	Vector m_vel;
+};
+
+struct Collision {
+	float 	m_t;
+	bool 	m_final;
+	Colour	m_colour;
+	Ray		m_nextRay;
+};
+
 
 class CpuExecutor {
 public:
@@ -14,7 +36,9 @@ public:
 	void TraceRays(uint32_t* buffer);
 
 private:
-	void TraceRay(uint32_t* buffer, size_t i, const WorldBounds& worldBounds);
+	void TryCollision(const Cuboid& cuboid, const Ray& ray, Collision& collision);
+
+	void TraceRay(uint32_t* buffer, size_t i);
 
 	const World& m_world;
 };
