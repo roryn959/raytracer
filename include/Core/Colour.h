@@ -13,6 +13,10 @@ inline Colour operator+(const Colour& c1, const Colour& c2) {
 	return Colour{ 1.0f, c1.m_red + c2.m_red, c1.m_green + c2.m_green, c1.m_blue + c2.m_blue };
 }
 
+inline Colour operator*(float d, const Colour& c) {
+	return Colour{ 1.0f, c.m_red * d, c.m_green * d, c.m_blue * d };
+}
+
 inline Colour operator*(const Colour& c, float d) {
 	return Colour{ 1.0f, c.m_red * d, c.m_green * d, c.m_blue * d };
 }

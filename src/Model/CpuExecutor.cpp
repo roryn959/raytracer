@@ -7,7 +7,7 @@ CpuExecutor::CpuExecutor(const World& world) :
 	m_accumulationCount{1}
 {
 	m_accumulator = new Colour[NUM_PIXELS];
-	ResetAccumulator();
+	RefreshAccumulator();
 }
 
 CpuExecutor::~CpuExecutor() {
@@ -49,6 +49,11 @@ Ray CpuExecutor::GenerateInitialRay(size_t i) {
 	//float dz = sqrt( 1 - (dx * dx) - (dy * dy) ); // -- > fisheye lens
 
 	return Ray{ Vector{ 0.0f, 0.0f, 0.0f }, Vector{ dx, dy, dz }, COLOUR_WHITE };
+}
+
+void CpuExecutor::RefreshAccumulator() {
+	memset(m_accumulator, 0.0f, NUM_PIXELS * sizeof(Colour));
+	m_accumulationCount = 0;
 }
 
 float CpuExecutor::Rand_11() {

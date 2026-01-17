@@ -12,7 +12,8 @@ struct GpuExecutor::Impl {
 GpuExecutor::GpuExecutor(const World& world) :
 	m_world{world},
 	m_accumulator{},
-	m_accumulationCount{1}
+	m_accumulationCount{1},
+	m_seed{0}
 {
 	@autoreleasepool {
 		impl = new Impl{};
@@ -27,6 +28,8 @@ GpuExecutor::GpuExecutor(const World& world) :
 		CheckCommandBuffer();
 
 		InitialisePipeline();
+
+		RefreshAccumulator();
 	}
 }
 
@@ -93,33 +96,63 @@ void GpuExecutor::InitialisePipeline()
     }
 }
 
-void GpuExecutor::TraceRays(uint32_t* pixels) {
-	size_t count = NUM_PIXELS;
-	size_t byteSize = count * sizeof(Colour);
+void GpuExecutor::RefreshAccumulator() {
+	if (m_world.IsMoving() && m_accumulationCount > 0) {
+		for (int i = 0; i < NUM_PIXELS; ++i) {
+			m_accumulator[i] = m_accumulator[i] / m_accumulationCount;
+		}
+		m_accumulationCount = 0;
+		return;
+	}
 
-	id<MTLBuffer> gpuBuffer = [
+	memset(m_accumulator, 0.0f, NUM_PIXELS * sizeof(Colour));
+	m_accumulationCount = 0;
+}
+
+void GpuExecutor::TraceRays(uint32_t* pixels) {
+	const Viewpoint& viewpoint = m_world.GetViewpoint();
+	int samples = 1;
+	bool moving = m_world.IsMoving();
+
+	if (moving)
+		RefreshAccumulator();
+
+	id<MTLBuffer> pixelBuffer = [
 		impl->device
-		newBufferWithLength:byteSize
+		newBufferWithBytesNoCopy:pixels
+        length:sizeof(uint32_t) * NUM_PIXELS
+        options:MTLResourceStorageModeShared
+        deallocator:nil
+	];
+
+	id<MTLBuffer> accumulationBuffer = [
+		impl->device
+		newBufferWithBytesNoCopy:m_accumulator
+		length:sizeof(Colour) * NUM_PIXELS
 		options:MTLResourceStorageModeShared
+		deallocator:nil
 	];
 
 	uint numPlanes = m_world.GetPlanes().size();
 	id<MTLBuffer> planeBuffer = [
-		impl->device newBufferWithBytes:m_world.GetPlanes().data()
+		impl->device
+		newBufferWithBytes:m_world.GetPlanes().data()
         length:sizeof(Plane) * numPlanes
         options:MTLResourceStorageModeShared
 	];
 
 	uint numCuboids = m_world.GetCuboids().size();
 	id<MTLBuffer> cuboidBuffer = [
-		impl->device newBufferWithBytes:m_world.GetCuboids().data()
+		impl->device
+		newBufferWithBytes:m_world.GetCuboids().data()
         length:sizeof(Cuboid) * numCuboids
         options:MTLResourceStorageModeShared
 	];
 
 	uint numCuboidLights = m_world.GetCuboidLights().size();
 	id<MTLBuffer> cuboidLightBuffer = [
-		impl->device newBufferWithBytes:m_world.GetCuboidLights().data()
+		impl->device
+		newBufferWithBytes:m_world.GetCuboidLights().data()
         length:sizeof(Cuboid) * numCuboidLights
         options:MTLResourceStorageModeShared
 	];
@@ -127,20 +160,25 @@ void GpuExecutor::TraceRays(uint32_t* pixels) {
 	id<MTLCommandBuffer> cmd = [impl->queue commandBuffer];
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
 
-    MTLSize gridSize = MTLSizeMake(count, 1, 1);
+    MTLSize gridSize = MTLSizeMake(NUM_PIXELS, 1, 1);
     NSUInteger tgSize = impl->pipeline.maxTotalThreadsPerThreadgroup;
-    if (tgSize > count) tgSize = count;
+    if (tgSize > NUM_PIXELS) tgSize = NUM_PIXELS;
     MTLSize threadgroupSize = MTLSizeMake(tgSize, 1, 1);
 
 	[enc setComputePipelineState:impl->pipeline];
-    [enc setBuffer:gpuBuffer offset:0 atIndex:0];
-	[enc setBytes:&m_accumulationCount length:sizeof(uint) atIndex:1];
-	[enc setBuffer:planeBuffer offset:0 atIndex:2];
-	[enc setBytes:&numPlanes length:sizeof(uint) atIndex:3];
-	[enc setBuffer:cuboidBuffer offset:0 atIndex:4];
-	[enc setBytes:&numCuboids length:sizeof(uint) atIndex:5];
-	[enc setBuffer:cuboidLightBuffer offset:0 atIndex:6];
-	[enc setBytes:&numCuboidLights length:sizeof(uint) atIndex:7];
+	[enc setBytes:&samples length:sizeof(uint) atIndex:0];
+	[enc setBytes:&m_seed length:sizeof(uint) atIndex:1];
+	[enc setBytes:&moving length:sizeof(bool) atIndex:2];
+	[enc setBytes:&viewpoint length:sizeof(Viewpoint) atIndex:3];
+    [enc setBuffer:pixelBuffer offset:0 atIndex:4];
+	[enc setBuffer:accumulationBuffer offset:0 atIndex:5];
+	[enc setBytes:&m_accumulationCount length:sizeof(uint) atIndex:6];
+	[enc setBuffer:planeBuffer offset:0 atIndex:7];
+	[enc setBytes:&numPlanes length:sizeof(uint) atIndex:8];
+	[enc setBuffer:cuboidBuffer offset:0 atIndex:9];
+	[enc setBytes:&numCuboids length:sizeof(uint) atIndex:10];
+	[enc setBuffer:cuboidLightBuffer offset:0 atIndex:11];
+	[enc setBytes:&numCuboidLights length:sizeof(uint) atIndex:12];
 
     [enc dispatchThreads:gridSize threadsPerThreadgroup:threadgroupSize];
 
@@ -153,15 +191,8 @@ void GpuExecutor::TraceRays(uint32_t* pixels) {
         return;
     }
 
-	Colour* gpuColours = (Colour*)[gpuBuffer contents];
+	if (!m_world.IsMoving())
+		m_accumulationCount += samples;
 
-	for (int i = 0; i < NUM_PIXELS; ++i) {
-		m_accumulator[i] = m_accumulator[i] + gpuColours[i];
-	}
-
-	for (int i = 0; i < NUM_PIXELS; ++i) {
-		pixels[i] = ToUint32( GammaCorrect(m_accumulator[i] / m_accumulationCount) );
-	}
-
-	++m_accumulationCount;
+	++m_seed;
 }

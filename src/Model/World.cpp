@@ -1,9 +1,17 @@
 #include "Model/World.h"
 
+#if GPU_BUILD
+#include "Model/GpuExecutor.h"
+#else
+#include "Model/CpuExecutor.h"
+#endif
+
 World::World() :
-	m_cuboidLights{},
 	m_planes{},
-	m_cuboids{}
+	m_cuboids{},
+	m_cuboidLights{},
+	m_viewpoint{ Vector{0.0f, 0.0f, 0.0f}, Vector{ 0.0f, 0.0f, 0.0f } },
+	m_velocity{ 0.0f, 0.0f, 0.0f }
 {
 	Plane leftWall{ AXIS::X, -1.0f, Material{ false, COLOUR_RED, 0.00f } };
 	m_planes.push_back(leftWall);
@@ -37,4 +45,11 @@ World::World() :
 
 	Cuboid slab1{ Vector{ -0.99f, 0.15f, 0.6f}, Vector{ -0.3f, 0.20f, 0.99f }, Material{ false, COLOUR_BLACK, 0.0f } };
 	m_cuboids.push_back(slab1);
+}
+
+void World::ProcessTimeTick(float t, Executor& executor) {
+	ShiftPosition(t * WALK_SPEED * m_velocity);
+
+	if (IsMoving())
+		executor.RefreshAccumulator();
 }

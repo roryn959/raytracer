@@ -1,8 +1,19 @@
 #include <metal_stdlib>
 using namespace metal;
 
-#define WINDOW_W 700
-#define WINDOW_H 700
+// ---------- Constants ----------
+
+#define WINDOW_W 820
+#define WINDOW_H 820
+
+constant int NUM_PIXELS = WINDOW_W * WINDOW_H;
+
+#define DIFFUSE_DAMPEN_FACTOR 0.8f
+#define EPSILON 1e-4
+#define MAX_COLLISIONS 20
+#define ACCUMULATOR_DECAY_FACTOR 0.8
+
+constant float GAMMA = 1.0f / 2.2f;
 
 // ---------- Axis ----------
 
@@ -45,6 +56,26 @@ inline float Max(Colour c) {
 	float max = (c.m_red > c.m_blue) ? c.m_red : c.m_blue;
 	max = (max > c.m_green) ? max : c.m_green;
 	return max;
+}
+
+inline Colour GammaCorrect(Colour c) {
+	float r = pow(c.m_red, GAMMA);
+	float g = pow(c.m_green, GAMMA);
+	float b = pow(c.m_blue, GAMMA);
+
+	if (r < 0.0f) r = 0.0f;
+	if (r > 1.0f) r = 1.0f;
+	if (g < 0.0f) g = 0.0f;
+	if (g > 1.0f) g = 1.0f;
+	if (b < 0.0f) b = 0.0f;
+	if (b > 1.0f) b = 1.0f;
+
+	return Colour{ c.m_opacity, r, g, b };
+}
+
+inline uint32_t ToUint32(Colour c) {
+	return 	( (static_cast<int>(c.m_opacity * 255)) << 24 ) | ( (static_cast<int>(c.m_red * 255)) << 16 ) |
+		( (static_cast<int>(c.m_green * 255)) << 8 ) | ( (static_cast<int>(c.m_blue * 255)) );
 }
 
 // ---------- Material ----------
@@ -136,16 +167,12 @@ inline Vector GetCentre(Cuboid c) {
 	return Vector{ (c.m_max.m_x + c.m_min.m_x) / 2.0f, (c.m_max.m_y + c.m_min.m_y) / 2.0f, (c.m_max.m_z + c.m_min.m_z) / 2.0f };
 }
 
-// ---------- Constants ----------
+// ---------- Viewpoint ----------
 
-#define WINDOW_W 820
-#define WINDOW_H 820
-
-constant int NUM_PIXELS = WINDOW_W * WINDOW_H;
-
-#define DIFFUSE_DAMPEN_FACTOR 0.8f
-#define EPSILON 1e-4
-#define MAX_COLLISIONS 20
+struct Viewpoint {
+	Vector m_position;
+	Vector m_direction;
+};
 
 // ---------- HELPER FUNCTIONS ----------
 
@@ -167,13 +194,15 @@ inline float Rand_11(uint seed) {
 	return (r * 2) - 1.0f;
 }
 
-Ray GenerateInitialRay(uint i) {
+Ray GenerateInitialRay(uint i, Viewpoint viewpoint) {
 	float dx = ( ( (i % WINDOW_W) / static_cast<float>(WINDOW_W - 1) ) * 2 ) - 1;
 	float dy = ( ( (i / WINDOW_W) / static_cast<float>(WINDOW_H - 1) ) * -2 ) + 1;
 	float dz = 0.5f; // normal lens
 	//float dz = sqrt( 1 - (dx * dx) - (dy * dy) ); // -- > fisheye lens
 
-	return Ray{ Vector{ 0.0f, 0.0f, 0.0f }, Vector{ dx, dy, dz }, COLOUR_WHITE };
+	Vector direction{ dx, dy, dz };
+
+	return Ray{ viewpoint.m_position, direction, COLOUR_WHITE };
 }
 
 inline uint FloatToUint(float f) {
@@ -320,26 +349,18 @@ bool TryCollision(Cuboid cuboid, Ray ray, thread Collision* bestCollision) {
 	return true;
 }
 
-// ---------- KERNEL ----------
-
-kernel void TraceRay(
-    device Colour* buffer [[ buffer(0) ]],
-	constant uint& accumulationCount    [[ buffer(1) ]],
-	device Plane* planes [[ buffer(2) ]],
-	constant uint& numPlanes [[ buffer(3) ]],
-	device Cuboid* cuboids [[ buffer(4) ]],
-	constant uint& numCuboids [[ buffer(5) ]],
-	device Cuboid* cuboidLights [[ buffer(6) ]],
-	constant uint& numCuboidLights [[ buffer(7) ]],
-    uint i [[ thread_position_in_grid ]]
-) {
-	uint seed = i + accumulationCount * 1664525u;
+uint GetSeed(uint i, uint j) {
+	uint seed = i + j * 1664525u;
 	seed ^= seed >> 16;
 	seed *= 0x7feb352du;
 	seed ^= seed >> 15;
 	seed ^= i;
 
-	thread Ray ray = GenerateInitialRay(i);
+	return seed;
+}
+
+Colour SimulateRay(uint i, Viewpoint viewpoint, uint seed, device Plane* planes, uint numPlanes, device Cuboid* cuboids, uint numCuboids, device Cuboid* cuboidLights, uint numCuboidLights) {
+	thread Ray ray = GenerateInitialRay(i, viewpoint);
 	thread Collision bestCollision;
 
 	uint collisions = 0;
@@ -364,8 +385,7 @@ kernel void TraceRay(
 		CalculateNextRay(&ray, bestCollision, seed);
 
 		if (bestCollision.m_material.m_final) {
-			buffer[i] = ray.m_colour;
-			return;
+			return ray.m_colour;
 		}
 
 		float rayEnergy = Max(ray.m_colour);
@@ -380,5 +400,51 @@ kernel void TraceRay(
 		++collisions;
 	}
 
-	buffer[i] = COLOUR_BLACK;
+	return COLOUR_BLACK;
+
+}
+
+// ---------- KERNEL ----------
+
+kernel void TraceRay(
+	constant 	uint& 		samples 			[[ buffer(0) ]],
+	constant	uint&		randseed			[[ buffer(1) ]],
+	constant	bool&		moving				[[ buffer(2) ]],
+	constant	Viewpoint*	viewpoint			[[ buffer(3) ]],
+    device 		uint* 		pixelBuffer 		[[ buffer(4) ]],
+	device 		Colour* 	accumulationBuffer 	[[ buffer(5) ]],
+	constant	uint& 		accumulationCount	[[ buffer(6) ]],
+	device 		Plane* 		planes 				[[ buffer(7) ]],
+	constant 	uint& 		numPlanes 			[[ buffer(8) ]],
+	device 		Cuboid* 	cuboids 			[[ buffer(9) ]],
+	constant 	uint& 		numCuboids 			[[ buffer(10) ]],
+	device 		Cuboid* 	cuboidLights 		[[ buffer(11) ]],
+	constant 	uint& 		numCuboidLights 	[[ buffer(12) ]],
+    uint pixel [[ thread_position_in_grid ]]
+) {
+	Colour accumulatedColour = accumulationBuffer[pixel];
+	uint sampleNumber = accumulationCount;
+
+	uint seed;
+	Colour result;
+
+	for (uint i = 0; i < samples; ++i) {
+		seed = GetSeed(pixel ^ (randseed * 68392), sampleNumber);
+		result = SimulateRay(pixel, *viewpoint, seed, planes, numPlanes, cuboids, numCuboids, cuboidLights, numCuboidLights);
+		
+		if (moving) {
+			accumulatedColour = accumulatedColour * (1 - ACCUMULATOR_DECAY_FACTOR) + result * ACCUMULATOR_DECAY_FACTOR;
+		} else {
+			accumulatedColour = accumulatedColour + result;
+		}
+		++sampleNumber;
+	}
+
+	accumulationBuffer[pixel] = accumulatedColour;
+
+	if (!moving) {
+		accumulatedColour = accumulatedColour / sampleNumber;
+	}
+
+	pixelBuffer[pixel] = ToUint32( GammaCorrect( accumulatedColour ) );
 }

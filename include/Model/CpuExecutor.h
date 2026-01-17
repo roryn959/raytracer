@@ -4,8 +4,6 @@
 #include <random>
 #include <thread>
 
-#include <iostream>
-
 #include "Core/Axis.h"
 #include "Core/Collision.h"
 #include "Core/Colour.h"
@@ -32,7 +30,7 @@ public:
 	void TraceRays(uint32_t* pixelBuffer);
 
 private:
-	inline void ResetAccumulator() { memset(m_accumulator, 0.0f, NUM_PIXELS * sizeof(Colour)); }
+	void RefreshAccumulator();
 
 	float Rand_11();
 	float Rand01();

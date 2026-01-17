@@ -1,7 +1,9 @@
 #include <SDL2/SDL.h>
-#include <chrono>
 #include <iostream>
 #include <math.h>
+
+#include "Model/World.h"
+#include "View/Canvas.h"
 
 #define GPU_BUILD 1
 
@@ -13,13 +15,55 @@ typedef GpuExecutor Executor;
 typedef CpuExecutor Executor;
 #endif
 
-#include "Model/World.h"
-#include "View/Canvas.h"
+#define FRAME_RATE_FREQUENCY 30
 
-typedef std::chrono::high_resolution_clock hrc;
+void handle_keydown(World& world, SDL_Event& event) {
+    switch (event.key.keysym.sym) {
+        case SDLK_a:
+            world.MoveRight();
+            break;
+        
+        case SDLK_d:
+            world.MoveLeft();
+            break;
 
+        case SDLK_w:
+            world.MoveBackward();
+            break;
 
-void RenderScene(Canvas& canvas, Executor& executor, uint32_t* buffer) {
+        case SDLK_s:
+            world.MoveForward();
+            break;
+        
+        default:
+            break;
+    }
+}
+
+void handle_keyup(World& world, SDL_Event& event) {
+    switch (event.key.keysym.sym) {
+        case SDLK_a:
+            world.UnMoveRight();
+            break;
+        
+        case SDLK_d:
+            world.UnMoveLeft();
+            break;
+
+        case SDLK_w:
+            world.UnMoveBackward();
+            break;
+
+        case SDLK_s:
+            world.UnMoveForward();
+            break;
+        
+        default:
+            break;
+    }
+}
+
+void RenderScene(Canvas& canvas, Executor& executor, const World& world, uint32_t* buffer) {
 	executor.TraceRays(buffer);
 	canvas.ApplyPixels(buffer);
 }
@@ -27,16 +71,12 @@ void RenderScene(Canvas& canvas, Executor& executor, uint32_t* buffer) {
 void Mainloop(Canvas& canvas, World& world, Executor& executor) {
 	uint32_t buffer[NUM_PIXELS];
 
-	std::chrono::time_point<hrc> start, end;
-	std::chrono::duration<float> duration;
+	executor.RefreshAccumulator();
+	RenderScene(canvas, executor, world, buffer);
 
-	start = hrc::now();
-	RenderScene(canvas, executor, buffer);
-	end = hrc::now();
-
-	duration = end - start;
-	float s = duration.count();
-	std::cout << "Initial render took " << s << " seconds.\n";
+	float lastTime = SDL_GetTicks() / 1000.0f;
+    float lastFpsTime = lastTime;
+    int frame_tick = FRAME_RATE_FREQUENCY;
 
     bool running = true;
     while (running) {
@@ -47,12 +87,36 @@ void Mainloop(Canvas& canvas, World& world, Executor& executor) {
                     running = false;
                     break;
 
+				case SDL_KEYDOWN:
+                    handle_keydown(world, event);
+                    break;
+                
+                case SDL_KEYUP:
+                    handle_keyup(world, event);
+                    break;
+
                 default:
                     break;
             }
         }
 
-		RenderScene(canvas, executor, buffer);
+		// Time-based processing
+        float currentTime = SDL_GetTicks() / 1000.0f;
+        float dt = currentTime - lastTime;
+
+		// Calculate fps
+        --frame_tick;
+        if (0 == frame_tick) {
+            float fps = FRAME_RATE_FREQUENCY / (currentTime - lastFpsTime);
+            std::cout << "fps: " << fps << "\n";
+            frame_tick = FRAME_RATE_FREQUENCY;
+            lastFpsTime = currentTime;
+		}
+
+		world.ProcessTimeTick(dt, executor);
+		RenderScene(canvas, executor, world, buffer);
+
+		lastTime = currentTime;
     }
 }
 
