@@ -11,7 +11,7 @@ constant int NUM_PIXELS = WINDOW_W * WINDOW_H;
 #define DIFFUSE_DAMPEN_FACTOR 0.8f
 #define EPSILON 1e-4
 #define MAX_COLLISIONS 20
-#define ACCUMULATOR_DECAY_FACTOR 0.8
+#define ACCUMULATOR_DECAY_FACTOR 0.2
 
 constant float GAMMA = 1.0f / 2.2f;
 
@@ -413,7 +413,7 @@ kernel void TraceRay(
 	constant	Viewpoint*	viewpoint			[[ buffer(3) ]],
     device 		uint* 		pixelBuffer 		[[ buffer(4) ]],
 	device 		Colour* 	accumulationBuffer 	[[ buffer(5) ]],
-	constant	uint& 		accumulationCount	[[ buffer(6) ]],
+	constant	uint&		accumulationCount	[[ buffer(6) ]],
 	device 		Plane* 		planes 				[[ buffer(7) ]],
 	constant 	uint& 		numPlanes 			[[ buffer(8) ]],
 	device 		Cuboid* 	cuboids 			[[ buffer(9) ]],
@@ -432,13 +432,12 @@ kernel void TraceRay(
 		seed = GetSeed(pixel ^ (randseed * 68392), sampleNumber);
 		result = SimulateRay(pixel, *viewpoint, seed, planes, numPlanes, cuboids, numCuboids, cuboidLights, numCuboidLights);
 		
-		if (moving) {
-			accumulatedColour = accumulatedColour * (1 - ACCUMULATOR_DECAY_FACTOR) + result * ACCUMULATOR_DECAY_FACTOR;
-		} else {
-			accumulatedColour = accumulatedColour + result;
-		}
+		accumulatedColour = accumulatedColour + result;
 		++sampleNumber;
 	}
+
+	if (moving)
+		accumulatedColour = accumulatedColour * (1 - ACCUMULATOR_DECAY_FACTOR) + result * ACCUMULATOR_DECAY_FACTOR;
 
 	accumulationBuffer[pixel] = accumulatedColour;
 

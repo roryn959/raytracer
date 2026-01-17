@@ -111,8 +111,9 @@ void GpuExecutor::RefreshAccumulator() {
 
 void GpuExecutor::TraceRays(uint32_t* pixels) {
 	const Viewpoint& viewpoint = m_world.GetViewpoint();
-	int samples = 1;
+	int samples = 2;
 	bool moving = m_world.IsMoving();
+	uint count = m_accumulationCount;
 
 	if (moving)
 		RefreshAccumulator();
@@ -172,7 +173,7 @@ void GpuExecutor::TraceRays(uint32_t* pixels) {
 	[enc setBytes:&viewpoint length:sizeof(Viewpoint) atIndex:3];
     [enc setBuffer:pixelBuffer offset:0 atIndex:4];
 	[enc setBuffer:accumulationBuffer offset:0 atIndex:5];
-	[enc setBytes:&m_accumulationCount length:sizeof(uint) atIndex:6];
+	[enc setBytes:&count length:sizeof(uint) atIndex:6];
 	[enc setBuffer:planeBuffer offset:0 atIndex:7];
 	[enc setBytes:&numPlanes length:sizeof(uint) atIndex:8];
 	[enc setBuffer:cuboidBuffer offset:0 atIndex:9];
