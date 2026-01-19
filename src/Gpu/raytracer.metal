@@ -10,10 +10,15 @@ constant int NUM_PIXELS = WINDOW_W * WINDOW_H;
 
 #define DIFFUSE_DAMPEN_FACTOR 0.8f
 #define EPSILON 1e-4
-#define MAX_COLLISIONS 20
-#define ACCUMULATOR_DECAY_FACTOR 0.2
+#define MAX_COLLISIONS 30
+#define ACCUMULATOR_DECAY_FACTOR 0.70
 
 constant float GAMMA = 1.0f / 2.2f;
+
+constant float PI = 3.14159265f;
+constant float DEG_TO_RAD = PI / 180.0f;
+constant float FOV_Y = 90.0f * DEG_TO_RAD;
+constant float ASPECT_RATIO = float(WINDOW_W) / float(WINDOW_H);
 
 // ---------- Axis ----------
 
@@ -98,6 +103,10 @@ inline Vector operator*(float s, Vector v) {
 	return Vector{ s * v.m_x, s * v.m_y, s * v.m_z };
 }
 
+inline Vector operator*(Vector v, float s) {
+	return Vector{ s * v.m_x, s * v.m_y, s * v.m_z };
+}
+
 inline Vector operator+(Vector v1, Vector v2) {
 	return Vector{ v1.m_x + v2.m_x, v1.m_y + v2.m_y, v1.m_z + v2.m_z };
 }
@@ -167,6 +176,14 @@ inline Vector GetCentre(Cuboid c) {
 	return Vector{ (c.m_max.m_x + c.m_min.m_x) / 2.0f, (c.m_max.m_y + c.m_min.m_y) / 2.0f, (c.m_max.m_z + c.m_min.m_z) / 2.0f };
 }
 
+// ---------- Sphere ----------
+
+struct Sphere {
+	Vector		m_position;
+	float		m_radius;
+	Material	m_material;
+};
+
 // ---------- Viewpoint ----------
 
 struct Viewpoint {
@@ -195,14 +212,45 @@ inline float Rand_11(uint seed) {
 }
 
 Ray GenerateInitialRay(uint i, Viewpoint viewpoint) {
-	float dx = ( ( (i % WINDOW_W) / static_cast<float>(WINDOW_W - 1) ) * 2 ) - 1;
-	float dy = ( ( (i / WINDOW_W) / static_cast<float>(WINDOW_H - 1) ) * -2 ) + 1;
-	float dz = 0.5f; // normal lens
+	//float dx = ( ( (i % WINDOW_W) / static_cast<float>(WINDOW_W - 1) ) * 2 ) - 1;
+	//float dy = ( ( (i / WINDOW_W) / static_cast<float>(WINDOW_H - 1) ) * -2 ) + 1;
+	//float dz = 0.5f; // normal lens
 	//float dz = sqrt( 1 - (dx * dx) - (dy * dy) ); // -- > fisheye lens
 
-	Vector direction{ dx, dy, dz };
+	float u = ( (i % WINDOW_W) + 0.5f ) / float(WINDOW_W);
+	float v = ( (i / WINDOW_W) + 0.5f ) / float(WINDOW_H);
 
-	return Ray{ viewpoint.m_position, direction, COLOUR_WHITE };
+	float tanHalfFovY = tan(FOV_Y * 0.5f);
+
+	float ndcX = 2.0f * u - 1.0f;
+	float ndcY = 1.0f - 2.0f * v;
+
+	float px = ndcX * tanHalfFovY * ASPECT_RATIO;
+	float py = ndcY * tanHalfFovY;
+	float pz = 1.0f;
+
+	Vector dir = Normalise(Vector{ px, py, pz });
+
+	float cosT = cos(viewpoint.m_direction.m_x);
+	float sinT = sin(viewpoint.m_direction.m_x);
+
+	Vector yawed = {
+    	dir.m_x * cosT + dir.m_z * sinT,
+    	dir.m_y,
+  	 	-dir.m_x * sinT + dir.m_z * cosT
+	};
+
+	float cosP = cos(viewpoint.m_direction.m_y);
+	float sinP = sin(viewpoint.m_direction.m_y);
+
+	Vector rotated = {
+    	yawed.m_x,
+    	yawed.m_y * cosP - yawed.m_z * sinP,
+    	yawed.m_y * sinP + yawed.m_z * cosP
+	};
+
+
+	return Ray{ viewpoint.m_position, Normalise(rotated), COLOUR_WHITE };
 }
 
 inline uint FloatToUint(float f) {
@@ -224,7 +272,11 @@ inline uint3 HashVector(Vector v) {
 Vector Scatter(Vector normal, uint seed) {
 	uint3 hash = HashVector(normal);
 	Vector random{ Rand_11(seed ^ hash.x), Rand_11(seed ^ hash.y), Rand_11(seed ^ hash.z) };
-	return Normalise(normal + random);
+	Vector dir = Normalise(random);
+	if (Dot(dir, normal) < 0.0f) {
+		dir = dir * -1.0f;
+	}
+	return dir;
 }
 
 bool ShouldSpectralReflect(float reflectIndex, uint seed, Ray ray) {
@@ -233,6 +285,8 @@ bool ShouldSpectralReflect(float reflectIndex, uint seed, Ray ray) {
 }
 
 void CalculateNextRay(thread Ray* ray, Collision collision, uint seed) {
+	ray->m_vel = Normalise(ray->m_vel);
+
 	// Is the material finalising?
 	if (collision.m_material.m_final) {
 		ray->m_colour = Filter(ray->m_colour, collision.m_material.m_colour);
@@ -250,6 +304,7 @@ void CalculateNextRay(thread Ray* ray, Collision collision, uint seed) {
 		ray->m_colour = newRayColour;
 	}
 
+	ray->m_vel = Normalise(ray->m_vel);
 	ray->m_pos = collision.m_location;
 }
 
@@ -349,6 +404,54 @@ bool TryCollision(Cuboid cuboid, Ray ray, thread Collision* bestCollision) {
 	return true;
 }
 
+bool TryCollision(
+    Sphere sphere,
+    Ray ray,
+    thread Collision* best
+) {
+    Vector L = ray.m_pos - sphere.m_position;
+
+    float a = Dot(ray.m_vel, ray.m_vel);
+    float b = 2.0f * Dot(ray.m_vel, L);
+    float c = Dot(L, L) - sphere.m_radius * sphere.m_radius;
+
+    float discr = b * b - 4.0f * a * c;
+    if (discr < 0.0f) return false;
+
+    float sqrtDiscr = sqrt(discr);
+
+    // Numerically stable root computation
+    float q = (b > 0.0f)
+        ? -0.5f * (b + sqrtDiscr)
+        : -0.5f * (b - sqrtDiscr);
+
+    float t0 = q / a;
+    float t1 = c / q;
+
+    // Ensure t0 <= t1 (branch-light swap)
+    if (t0 > t1) {
+        float tmp = t0;
+        t0 = t1;
+        t1 = tmp;
+    }
+
+    // Pick nearest valid hit
+    float t = (t0 > EPSILON) ? t0 : t1;
+    if (t <= EPSILON) return false;
+    if (t >= best->m_t) return false;
+
+    Vector P = ray.m_pos + t * ray.m_vel;
+    Vector N = Normalise(P - sphere.m_position);
+
+    best->m_t = t;
+    best->m_location = P + N * EPSILON;
+    best->m_normal = N;
+    best->m_material = sphere.m_material;
+
+    return true;
+}
+
+
 uint GetSeed(uint i, uint j) {
 	uint seed = i + j * 1664525u;
 	seed ^= seed >> 16;
@@ -359,7 +462,19 @@ uint GetSeed(uint i, uint j) {
 	return seed;
 }
 
-Colour SimulateRay(uint i, Viewpoint viewpoint, uint seed, device Plane* planes, uint numPlanes, device Cuboid* cuboids, uint numCuboids, device Cuboid* cuboidLights, uint numCuboidLights) {
+Colour SimulateRay(
+	uint i,
+	Viewpoint viewpoint,
+	uint seed,
+	device Plane* planes,
+	uint numPlanes,
+	device Cuboid* cuboids,
+	uint numCuboids,
+	device Cuboid* cuboidLights,
+	uint numCuboidLights,
+	device Sphere* spheres,
+	uint numSpheres
+) {
 	thread Ray ray = GenerateInitialRay(i, viewpoint);
 	thread Collision bestCollision;
 
@@ -380,6 +495,11 @@ Colour SimulateRay(uint i, Viewpoint viewpoint, uint seed, device Plane* planes,
 		for (uint j = 0; j < numCuboids; ++j) {
 			Cuboid cuboid = cuboids[j];
 			TryCollision(cuboid, ray, &bestCollision);
+		}
+
+		for (uint j = 0; j < numSpheres; ++j) {
+			Sphere sphere = spheres[j];
+			TryCollision(sphere, ray, &bestCollision);
 		}
 
 		CalculateNextRay(&ray, bestCollision, seed);
@@ -420,6 +540,8 @@ kernel void TraceRay(
 	constant 	uint& 		numCuboids 			[[ buffer(10) ]],
 	device 		Cuboid* 	cuboidLights 		[[ buffer(11) ]],
 	constant 	uint& 		numCuboidLights 	[[ buffer(12) ]],
+	device		Sphere*		spheres				[[ buffer(13) ]],
+	constant	uint&		numSpheres			[[ buffer(14) ]],
     uint pixel [[ thread_position_in_grid ]]
 ) {
 	Colour accumulatedColour = accumulationBuffer[pixel];
@@ -430,14 +552,16 @@ kernel void TraceRay(
 
 	for (uint i = 0; i < samples; ++i) {
 		seed = GetSeed(pixel ^ (randseed * 68392), sampleNumber);
-		result = SimulateRay(pixel, *viewpoint, seed, planes, numPlanes, cuboids, numCuboids, cuboidLights, numCuboidLights);
+		result = SimulateRay(pixel, *viewpoint, seed, planes, numPlanes, cuboids, numCuboids, cuboidLights, numCuboidLights, spheres, numSpheres);
 		
-		accumulatedColour = accumulatedColour + result;
+		if (moving)
+			accumulatedColour = accumulatedColour * (ACCUMULATOR_DECAY_FACTOR) + result * (1 - ACCUMULATOR_DECAY_FACTOR);
+		else {
+			accumulatedColour = accumulatedColour + result;
+		}
+			
 		++sampleNumber;
 	}
-
-	if (moving)
-		accumulatedColour = accumulatedColour * (1 - ACCUMULATOR_DECAY_FACTOR) + result * ACCUMULATOR_DECAY_FACTOR;
 
 	accumulationBuffer[pixel] = accumulatedColour;
 

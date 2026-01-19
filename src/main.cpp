@@ -17,23 +17,39 @@ typedef CpuExecutor Executor;
 
 #define FRAME_RATE_FREQUENCY 30
 
+#define LOOK_SENSITIVITY 300
+
+
+struct MousePosition {
+	int m_x;
+	int m_y;
+};
+
 void handle_keydown(World& world, SDL_Event& event) {
     switch (event.key.keysym.sym) {
         case SDLK_a:
-            world.MoveRight();
+            world.MoveLeft();
             break;
         
         case SDLK_d:
-            world.MoveLeft();
+            world.MoveRight();
             break;
 
         case SDLK_w:
-            world.MoveBackward();
+            world.MoveForward();
             break;
 
         case SDLK_s:
-            world.MoveForward();
+            world.MoveBackward();
             break;
+		
+		case SDLK_q:
+			world.MoveUp();
+			break;
+		
+		case SDLK_e:
+			world.MoveDown();
+			break;
         
         default:
             break;
@@ -43,40 +59,66 @@ void handle_keydown(World& world, SDL_Event& event) {
 void handle_keyup(World& world, SDL_Event& event) {
     switch (event.key.keysym.sym) {
         case SDLK_a:
-            world.UnMoveRight();
+            world.UnMoveLeft();
             break;
         
         case SDLK_d:
-            world.UnMoveLeft();
+            world.UnMoveRight();
             break;
 
         case SDLK_w:
-            world.UnMoveBackward();
+            world.UnMoveForward();
             break;
 
         case SDLK_s:
-            world.UnMoveForward();
+            world.UnMoveBackward();
             break;
+
+		case SDLK_q:
+			world.UnMoveUp();
+			break;
+		
+		case SDLK_e:
+			world.UnMoveDown();
+			break;
         
         default:
             break;
     }
 }
 
-void RenderScene(Canvas& canvas, Executor& executor, const World& world, uint32_t* buffer) {
+void handle_mouse_motion(World& world, SDL_Event& event, MousePosition& mp) {
+	int x;
+	int y;
+
+	SDL_GetMouseState(&x, &y);
+
+	int dx = x - mp.m_x;
+	int dy = mp.m_y - y;
+
+	world.ShiftView(dx * (M_PI / LOOK_SENSITIVITY), dy * (M_PI / LOOK_SENSITIVITY));
+
+	mp.m_x = x;
+	mp.m_y = y;
+}
+
+void RenderScene(Canvas& canvas, Executor& executor, World& world, uint32_t* buffer) {
 	executor.TraceRays(buffer);
 	canvas.ApplyPixels(buffer);
+	world.SetViewChanged(false);
 }
 
 void Mainloop(Canvas& canvas, World& world, Executor& executor) {
 	uint32_t buffer[NUM_PIXELS];
 
-	executor.RefreshAccumulator();
 	RenderScene(canvas, executor, world, buffer);
 
 	float lastTime = SDL_GetTicks() / 1000.0f;
     float lastFpsTime = lastTime;
     int frame_tick = FRAME_RATE_FREQUENCY;
+
+	MousePosition mousePosition;
+	SDL_GetMouseState(&mousePosition.m_x, &mousePosition.m_y);
 
     bool running = true;
     while (running) {
@@ -94,6 +136,10 @@ void Mainloop(Canvas& canvas, World& world, Executor& executor) {
                 case SDL_KEYUP:
                     handle_keyup(world, event);
                     break;
+
+				case SDL_MOUSEMOTION:
+					handle_mouse_motion(world, event, mousePosition);
+					break;
 
                 default:
                     break;

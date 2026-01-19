@@ -28,8 +28,6 @@ GpuExecutor::GpuExecutor(const World& world) :
 		CheckCommandBuffer();
 
 		InitialisePipeline();
-
-		RefreshAccumulator();
 	}
 }
 
@@ -97,26 +95,22 @@ void GpuExecutor::InitialisePipeline()
 }
 
 void GpuExecutor::RefreshAccumulator() {
-	if (m_world.IsMoving() && m_accumulationCount > 0) {
+	if (m_accumulationCount == 0) return;
+
+	if (m_world.HasViewChanged() || m_world.IsMoving()) {
 		for (int i = 0; i < NUM_PIXELS; ++i) {
 			m_accumulator[i] = m_accumulator[i] / m_accumulationCount;
 		}
 		m_accumulationCount = 0;
-		return;
 	}
-
-	memset(m_accumulator, 0.0f, NUM_PIXELS * sizeof(Colour));
-	m_accumulationCount = 0;
 }
 
 void GpuExecutor::TraceRays(uint32_t* pixels) {
 	const Viewpoint& viewpoint = m_world.GetViewpoint();
 	int samples = 2;
-	bool moving = m_world.IsMoving();
+	bool moving = m_world.HasViewChanged() || m_world.IsMoving();
 	uint count = m_accumulationCount;
 
-	if (moving)
-		RefreshAccumulator();
 
 	id<MTLBuffer> pixelBuffer = [
 		impl->device
@@ -158,6 +152,14 @@ void GpuExecutor::TraceRays(uint32_t* pixels) {
         options:MTLResourceStorageModeShared
 	];
 
+	uint numSpheres = m_world.GetSpheres().size();
+	id<MTLBuffer> sphereBuffer = [
+		impl->device
+		newBufferWithBytes:m_world.GetSpheres().data()
+		length:sizeof(Sphere) * numSpheres
+		options:MTLResourceStorageModeShared
+	];
+
 	id<MTLCommandBuffer> cmd = [impl->queue commandBuffer];
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
 
@@ -167,19 +169,27 @@ void GpuExecutor::TraceRays(uint32_t* pixels) {
     MTLSize threadgroupSize = MTLSizeMake(tgSize, 1, 1);
 
 	[enc setComputePipelineState:impl->pipeline];
+
 	[enc setBytes:&samples length:sizeof(uint) atIndex:0];
 	[enc setBytes:&m_seed length:sizeof(uint) atIndex:1];
 	[enc setBytes:&moving length:sizeof(bool) atIndex:2];
 	[enc setBytes:&viewpoint length:sizeof(Viewpoint) atIndex:3];
+
     [enc setBuffer:pixelBuffer offset:0 atIndex:4];
 	[enc setBuffer:accumulationBuffer offset:0 atIndex:5];
 	[enc setBytes:&count length:sizeof(uint) atIndex:6];
+
 	[enc setBuffer:planeBuffer offset:0 atIndex:7];
 	[enc setBytes:&numPlanes length:sizeof(uint) atIndex:8];
+
 	[enc setBuffer:cuboidBuffer offset:0 atIndex:9];
 	[enc setBytes:&numCuboids length:sizeof(uint) atIndex:10];
+
 	[enc setBuffer:cuboidLightBuffer offset:0 atIndex:11];
 	[enc setBytes:&numCuboidLights length:sizeof(uint) atIndex:12];
+
+	[enc setBuffer:sphereBuffer offset:0 atIndex:13];
+	[enc setBytes:&numSpheres length:sizeof(uint) atIndex:14];
 
     [enc dispatchThreads:gridSize threadsPerThreadgroup:threadgroupSize];
 
@@ -192,7 +202,7 @@ void GpuExecutor::TraceRays(uint32_t* pixels) {
         return;
     }
 
-	if (!m_world.IsMoving())
+	if (!m_world.IsMoving() && !m_world.HasViewChanged())
 		m_accumulationCount += samples;
 
 	++m_seed;
